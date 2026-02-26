@@ -316,7 +316,9 @@ const App: React.FC = () => {
 
   /** 渲染主工作区 */
   const renderWorkspace = () => {
-    const hasImageColumn = !!currentScene!.imageColumnId;
+    if (!currentScene) return null;
+
+    const hasImageColumn = !!currentScene.imageColumnId;
     const hasUniqueFields = currentScene.uniqueFields && currentScene.uniqueFields.length > 0;
 
     return (
