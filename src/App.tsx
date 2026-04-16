@@ -14,6 +14,7 @@ import {
   getTableList,
   getTableFields,
   getRecordImages,
+  getRecordsWithImages,
 } from './services/bitable';
 import './App.css';
 
@@ -156,21 +157,9 @@ const App: React.FC = () => {
     setSuccessMsg(null);
 
     try {
-      // 1. 获取表格中的所有记录
-      const { getTableRecords } = await import('./services/bitable');
-      const records = await getTableRecords(selectedTableId);
-      console.log(`[BatchProcess] 获取到 ${records.length} 条记录`);
-
-      // 2. 过滤出有图片的记录
-      const recordsWithImages: { recordId: string; urls: string[] }[] = [];
-      for (const record of records) {
-        const urls = await getRecordImages(record.id, currentScene.imageColumnId!, selectedTableId);
-        console.log(`[BatchProcess] recordId=${record.id}, urls=`, urls);
-        if (urls.length > 0) {
-          recordsWithImages.push({ recordId: record.id, urls });
-        }
-      }
-
+      // 1+2. 批量扫描所有记录，高效筛选有附件的记录并获取 URL
+      console.log(`[BatchProcess] imageColumnId=${currentScene.imageColumnId}, selectedTableId=${selectedTableId}`);
+      const recordsWithImages = await getRecordsWithImages(currentScene.imageColumnId!, selectedTableId);
       console.log(`[BatchProcess] 找到 ${recordsWithImages.length} 条有图片的记录`);
 
       if (recordsWithImages.length === 0) {

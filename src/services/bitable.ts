@@ -201,9 +201,7 @@ export async function getTableRecords(tableId?: string): Promise<TableRecord[]> 
 }
 
 /**
- * 获取记录中的图片附件URL列表
- * 使用 SDK 提供的 getAttachmentUrls 方法获取可下载的 URL
- * @param imageFieldIdOrName 字段ID或字段名
+ * 获取单条记录中的图片附件URL列表（单条查询用）
  */
 export async function getRecordImages(
   recordId: string,
@@ -214,49 +212,115 @@ export async function getRecordImages(
     ? await bitable.base.getTableById(tableId)
     : await getActiveTable();
 
-  // 通过字段列表查找附件字段
-  const fieldList = await table.getFieldList();
-  let attachmentField: unknown = null;
-
-  // 先尝试按 ID 查找
-  for (const field of fieldList) {
-    if (field.id === imageFieldIdOrName) {
-      const type = await field.getType();
-      if (type === BitableFieldType.Attachment) {
-        attachmentField = field;
-      }
-      break;
-    }
-  }
-
-  // 如果没找到，尝试按名称查找（兼容旧数据）
-  if (!attachmentField) {
-    for (const field of fieldList) {
-      const name = await field.getName();
-      if (name === imageFieldIdOrName) {
-        const type = await field.getType();
-        if (type === BitableFieldType.Attachment) {
-          attachmentField = field;
-        }
-        break;
-      }
-    }
-  }
-
-  if (!attachmentField) {
-    console.log(`[getRecordImages] 未找到附件字段: ${imageFieldIdOrName}`);
-    return [];
-  }
+  const attachmentField = await findAttachmentField(table, imageFieldIdOrName);
+  if (!attachmentField) return [];
 
   try {
-    // 使用 SDK 方法获取附件下载 URL
-    const urls = await (attachmentField as { getAttachmentUrls: (recordId: string) => Promise<string[]> }).getAttachmentUrls(recordId);
-    console.log(`[getRecordImages] recordId=${recordId}, urls=`, urls);
+    const cellValue = await table.getCellValue(attachmentField.id, recordId);
+    if (!cellValue || (Array.isArray(cellValue) && cellValue.length === 0)) {
+      return [];
+    }
+
+    const urls = await (attachmentField as unknown as { getAttachmentUrls: (recordId: string) => Promise<string[]> }).getAttachmentUrls(recordId);
     return urls || [];
   } catch (error) {
     console.error(`[getRecordImages] 获取附件 URL 失败:`, error);
     return [];
   }
+}
+
+/**
+ * 在字段列表中查找附件字段（按 ID 优先，按名称兜底）
+ */
+async function findAttachmentField(
+  table: Awaited<ReturnType<typeof getActiveTable>>,
+  imageFieldIdOrName: string
+) {
+  const fieldList = await table.getFieldList();
+
+  for (const field of fieldList) {
+    if (field.id === imageFieldIdOrName) {
+      const type = await field.getType();
+      return type === BitableFieldType.Attachment ? field : null;
+    }
+  }
+
+  for (const field of fieldList) {
+    const name = await field.getName();
+    if (name === imageFieldIdOrName) {
+      const type = await field.getType();
+      return type === BitableFieldType.Attachment ? field : null;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 批量扫描所有记录，高效返回有图片附件的记录及其 URL
+ *  - 字段列表只查一次
+ *  - 利用 getRecordsByPage 返回的 fields 预筛有附件的记录
+ *  - 只对有附件的记录调用 getAttachmentUrls
+ *  - 无记录数上限
+ */
+export async function getRecordsWithImages(
+  imageFieldId: string,
+  tableId?: string
+): Promise<{ recordId: string; urls: string[] }[]> {
+  const table = tableId
+    ? await bitable.base.getTableById(tableId)
+    : await getActiveTable();
+
+  const attachmentField = await findAttachmentField(table, imageFieldId);
+  if (!attachmentField) {
+    console.warn(`[getRecordsWithImages] 未找到附件字段: ${imageFieldId}`);
+    return [];
+  }
+
+  const fieldId = attachmentField.id;
+  const candidateRecordIds: string[] = [];
+  let hasMore = true;
+  let pageToken: number | undefined;
+  let totalRecords = 0;
+  let debugSampled = false;
+
+  while (hasMore) {
+    const result = await table.getRecordsByPage({ pageToken, pageSize: 200 });
+    totalRecords += result.records.length;
+
+    for (const r of result.records) {
+      const cellValue = r.fields[fieldId];
+
+      if (!debugSampled && cellValue) {
+        console.log(`[getRecordsWithImages] 样本附件值 recordId=${r.recordId}:`, JSON.stringify(cellValue).slice(0, 300));
+        debugSampled = true;
+      }
+
+      if (cellValue && Array.isArray(cellValue) && cellValue.length > 0) {
+        candidateRecordIds.push(r.recordId);
+      }
+    }
+
+    hasMore = result.hasMore;
+    pageToken = result.pageToken;
+  }
+
+  console.log(`[getRecordsWithImages] 扫描 ${totalRecords} 条记录，发现 ${candidateRecordIds.length} 条有附件`);
+
+  const results: { recordId: string; urls: string[] }[] = [];
+
+  for (const recordId of candidateRecordIds) {
+    try {
+      const urls = await (attachmentField as unknown as { getAttachmentUrls: (recordId: string) => Promise<string[]> }).getAttachmentUrls(recordId);
+      if (urls && urls.length > 0) {
+        results.push({ recordId, urls });
+      }
+    } catch (error) {
+      console.error(`[getRecordsWithImages] recordId=${recordId} 获取URL失败:`, error);
+    }
+  }
+
+  return results;
 }
 
 /**
