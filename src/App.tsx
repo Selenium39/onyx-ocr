@@ -15,6 +15,8 @@ import {
   getTableFields,
   getRecordImages,
   getRecordsWithImages,
+  ensureStatusField,
+  markRecordsRecognized,
 } from './services/bitable';
 import './App.css';
 
@@ -157,13 +159,16 @@ const App: React.FC = () => {
     setSuccessMsg(null);
 
     try {
-      // 1+2. 批量扫描所有记录，高效筛选有附件的记录并获取 URL
+      // 1. 确保"识别状态"字段存在
+      const statusFieldId = await ensureStatusField(selectedTableId);
+
+      // 2. 批量扫描所有记录，筛选有附件且未识别的记录
       console.log(`[BatchProcess] imageColumnId=${currentScene.imageColumnId}, selectedTableId=${selectedTableId}`);
-      const recordsWithImages = await getRecordsWithImages(currentScene.imageColumnId!, selectedTableId);
-      console.log(`[BatchProcess] 找到 ${recordsWithImages.length} 条有图片的记录`);
+      const recordsWithImages = await getRecordsWithImages(currentScene.imageColumnId!, selectedTableId, statusFieldId);
+      console.log(`[BatchProcess] 找到 ${recordsWithImages.length} 条需要识别的记录`);
 
       if (recordsWithImages.length === 0) {
-        setError(`在"${currentScene.imageColumnName || '图片'}"列中没有找到图片附件。请确保：1. 该列是附件类型；2. 已上传图片到该列。`);
+        setSuccessMsg('所有带图片的记录已经识别过了，无需重复处理。');
         setIsBatchProcessing(false);
         return;
       }
@@ -172,6 +177,7 @@ const App: React.FC = () => {
       setBatchProgress({ current: 0, total: recordsWithImages.length, success: 0, failed: 0 });
 
       const allResults: { recordId: string; rows: OcrRow[] }[] = [];
+      const processedRecordIds: string[] = [];
 
       for (let i = 0; i < recordsWithImages.length; i++) {
         const { recordId, urls } = recordsWithImages[i];
@@ -195,6 +201,7 @@ const App: React.FC = () => {
 
           const result = await recognizeImage(settings, currentScene, imageData);
           allResults.push({ recordId, rows: result.rows });
+          processedRecordIds.push(recordId);
           setBatchProgress((prev) => ({ ...prev, success: prev.success + 1 }));
         } catch (err: any) {
           console.error(`[BatchProcess] 处理第 ${i + 1} 张图片失败:`, err);
@@ -214,6 +221,9 @@ const App: React.FC = () => {
 
         // 使用 upsert 写入
         const { updated, inserted } = await upsertRecords(allRows, fieldMap, currentScene, selectedTableId);
+
+        // 5. 标记已成功识别的记录
+        await markRecordsRecognized(processedRecordIds, statusFieldId, selectedTableId);
 
         setSuccessMsg(
           `批量处理完成！成功识别 ${allResults.length}/${recordsWithImages.length} 条记录，` +

@@ -265,7 +265,8 @@ async function findAttachmentField(
  */
 export async function getRecordsWithImages(
   imageFieldId: string,
-  tableId?: string
+  tableId?: string,
+  statusFieldId?: string
 ): Promise<{ recordId: string; urls: string[] }[]> {
   const table = tableId
     ? await bitable.base.getTableById(tableId)
@@ -320,7 +321,121 @@ export async function getRecordsWithImages(
     }
   }
 
+  // 如果提供了状态字段ID，过滤掉已识别的记录
+  if (statusFieldId && results.length > 0) {
+    const values = await getFieldValuesByIds(
+      results.map(r => r.recordId),
+      statusFieldId,
+      tableId
+    );
+    const filtered = results.filter(r => isCellValueEmpty(values[r.recordId]));
+    console.log(`[getRecordsWithImages] 过滤已识别记录: ${results.length} -> ${filtered.length}`);
+    return filtered;
+  }
+
   return results;
+}
+
+/**
+ * 批量获取指定字段的值
+ */
+async function getFieldValuesByIds(
+  recordIds: string[],
+  fieldId: string,
+  tableId?: string
+): Promise<Record<string, unknown>> {
+  const table = tableId
+    ? await bitable.base.getTableById(tableId)
+    : await getActiveTable();
+
+  const result: Record<string, unknown> = {};
+
+  for (let i = 0; i < recordIds.length; i += 50) {
+    const batch = recordIds.slice(i, i + 50);
+    const records = await table.getRecordsByIds(batch);
+    for (let idx = 0; idx < records.length; idx++) {
+      const fields = records[idx].fields as Record<string, unknown>;
+      result[batch[idx]] = fields[fieldId];
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 判断单元格值是否为空
+ */
+function isCellValueEmpty(value: unknown): boolean {
+  if (value === null || value === undefined || value === '') {
+    return true;
+  }
+  if (Array.isArray(value) && value.length === 0) {
+    return true;
+  }
+  if (Array.isArray(value) && value.length > 0) {
+    const first = value[0];
+    if (first && typeof first === 'object' && 'text' in first) {
+      return !((first as { text?: string }).text);
+    }
+    return false;
+  }
+  return false;
+}
+
+const STATUS_FIELD_NAME = 'OnyxOCR识别状态';
+
+/**
+ * 确保表格中有"识别状态"字段，如果不存在则创建文本字段
+ * 返回 fieldId
+ */
+export async function ensureStatusField(tableId?: string): Promise<string> {
+  const table = tableId
+    ? await bitable.base.getTableById(tableId)
+    : await getActiveTable();
+
+  const fieldList = await table.getFieldList();
+
+  for (const field of fieldList) {
+    const name = await field.getName();
+    if (name === STATUS_FIELD_NAME) {
+      return field.id;
+    }
+  }
+
+  const newFieldId = await table.addField({
+    type: BitableFieldType.Text,
+    name: STATUS_FIELD_NAME,
+  } as any);
+
+  console.log(`[ensureStatusField] 创建字段 "${STATUS_FIELD_NAME}": ${newFieldId}`);
+  return newFieldId;
+}
+
+/**
+ * 批量标记记录为已识别
+ */
+export async function markRecordsRecognized(
+  recordIds: string[],
+  statusFieldId: string,
+  tableId?: string
+): Promise<void> {
+  if (recordIds.length === 0) return;
+
+  const table = tableId
+    ? await bitable.base.getTableById(tableId)
+    : await getActiveTable();
+
+  for (const recordId of recordIds) {
+    try {
+      await table.setRecord(recordId, {
+        fields: {
+          [statusFieldId]: [{ type: 'text', text: '已识别' }] as unknown as IOpenCellValue,
+        },
+      });
+    } catch (error) {
+      console.error(`[markRecordsRecognized] 更新记录 ${recordId} 失败:`, error);
+    }
+  }
 }
 
 /**
