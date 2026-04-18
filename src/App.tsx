@@ -173,39 +173,43 @@ const App: React.FC = () => {
         return;
       }
 
-      // 3. 批量识别
-      setBatchProgress({ current: 0, total: recordsWithImages.length, success: 0, failed: 0 });
+      // 3. 批量识别（每行的所有附件都识别）
+      const totalImages = recordsWithImages.reduce((sum, r) => sum + r.urls.length, 0);
+      setBatchProgress({ current: 0, total: totalImages, success: 0, failed: 0 });
 
       const allResults: { recordId: string; rows: OcrRow[] }[] = [];
       const processedRecordIds: string[] = [];
+      let imageIndex = 0;
 
-      for (let i = 0; i < recordsWithImages.length; i++) {
-        const { recordId, urls } = recordsWithImages[i];
-        setBatchProgress((prev) => ({ ...prev, current: i + 1 }));
+      for (const { recordId, urls } of recordsWithImages) {
+        for (const imageUrl of urls) {
+          imageIndex++;
+          setBatchProgress((prev) => ({ ...prev, current: imageIndex }));
 
-        try {
-          // 只处理第一张图片
-          const imageUrl = urls[0];
-          console.log(`[BatchProcess] 处理第 ${i + 1} 张图片:`, imageUrl);
+          try {
+            console.log(`[BatchProcess] 处理第 ${imageIndex}/${totalImages} 张图片:`, imageUrl);
 
-          // 对于飞书附件URL，直接传给百炼让服务器下载
-          // 对于其他URL，尝试下载转为base64
-          let imageData: string;
-          if (imageUrl.includes('feishu.cn') || imageUrl.includes('larksuite.com')) {
-            console.log('[BatchProcess] 使用飞书URL直接识别');
-            imageData = imageUrl;
-          } else {
-            console.log('[BatchProcess] 下载图片转为base64');
-            imageData = await urlToBase64(imageUrl);
+            // 对于飞书附件URL，直接传给百炼让服务器下载
+            // 对于其他URL，尝试下载转为base64
+            let imageData: string;
+            if (imageUrl.includes('feishu.cn') || imageUrl.includes('larksuite.com')) {
+              console.log('[BatchProcess] 使用飞书URL直接识别');
+              imageData = imageUrl;
+            } else {
+              console.log('[BatchProcess] 下载图片转为base64');
+              imageData = await urlToBase64(imageUrl);
+            }
+
+            const result = await recognizeImage(settings, currentScene, imageData);
+            allResults.push({ recordId, rows: result.rows });
+            if (!processedRecordIds.includes(recordId)) {
+              processedRecordIds.push(recordId);
+            }
+            setBatchProgress((prev) => ({ ...prev, success: prev.success + 1 }));
+          } catch (err: any) {
+            console.error(`[BatchProcess] 处理第 ${imageIndex} 张图片失败:`, err);
+            setBatchProgress((prev) => ({ ...prev, failed: prev.failed + 1 }));
           }
-
-          const result = await recognizeImage(settings, currentScene, imageData);
-          allResults.push({ recordId, rows: result.rows });
-          processedRecordIds.push(recordId);
-          setBatchProgress((prev) => ({ ...prev, success: prev.success + 1 }));
-        } catch (err: any) {
-          console.error(`[BatchProcess] 处理第 ${i + 1} 张图片失败:`, err);
-          setBatchProgress((prev) => ({ ...prev, failed: prev.failed + 1 }));
         }
       }
 
