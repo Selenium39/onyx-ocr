@@ -536,15 +536,27 @@ export async function findRecordsByUniqueFields(
   // 批量获取记录内容
   const matchedIds: string[] = [];
 
+  console.log('[findRecordsByUniqueFields] 查找数据:', JSON.stringify(data));
+  console.log('[findRecordsByUniqueFields] 唯一字段:', uniqueFields);
+  console.log('[findRecordsByUniqueFields] fieldMap:', JSON.stringify(fieldMap));
+  console.log(`[findRecordsByUniqueFields] 表格共有 ${recordIds.length} 条记录`);
+
   // 分批获取记录（每次最多 50 条，避免超过限制）
   for (let i = 0; i < recordIds.length; i += 50) {
     const batch = recordIds.slice(i, i + 50);
     const records = await table.getRecordsByIds(batch);
+    console.log(`[findRecordsByUniqueFields] getRecordsByIds 返回 ${records.length} 条记录`);
 
     for (let idx = 0; idx < records.length; idx++) {
       const record = records[idx];
-      const recordId = batch[idx];
+      // 飞书 SDK getRecordsByIds 返回的记录结构可能是 { fields: { recordId, ... } }
       const fields = record.fields as Record<string, unknown>;
+      const recordId = String(fields.recordId ?? batch[idx] ?? '');
+      if (!recordId) {
+        console.warn('[findRecordsByUniqueFields] record 没有 recordId，跳过。record keys:', Object.keys(record || {}));
+        continue;
+      }
+
       let isMatch = true;
 
       for (const ocrFieldName of uniqueFields) {
@@ -552,7 +564,7 @@ export async function findRecordsByUniqueFields(
         const expectedValue = String(data[ocrFieldName] ?? '');
 
         if (!fieldId) {
-          // 唯一字段在 fieldMap 中找不到，视为不匹配（避免因跳过导致误匹配）
+          console.warn(`[findRecordsByUniqueFields] 字段 "${ocrFieldName}" 在 fieldMap 中不存在`);
           isMatch = false;
           break;
         }
@@ -564,11 +576,21 @@ export async function findRecordsByUniqueFields(
         if (cellValue !== null && cellValue !== undefined) {
           if (Array.isArray(cellValue) && cellValue.length > 0) {
             // 多行文本等数组类型
-            actualValue = String((cellValue[0] as { text?: string })?.text ?? cellValue[0] ?? '');
+            const first = cellValue[0];
+            if (first && typeof first === 'object' && 'text' in first) {
+              actualValue = String((first as { text?: string }).text ?? '');
+            } else {
+              actualValue = String(first ?? '');
+            }
           } else {
             actualValue = String(cellValue);
           }
         }
+
+        console.log(
+          `[findRecordsByUniqueFields] recordId=${recordId}, field=${ocrFieldName}(fieldId=${fieldId}), ` +
+          `expected="${expectedValue}", actual="${actualValue}", match=${actualValue === expectedValue}`
+        );
 
         if (actualValue !== expectedValue) {
           isMatch = false;
@@ -577,11 +599,13 @@ export async function findRecordsByUniqueFields(
       }
 
       if (isMatch) {
+        console.log(`[findRecordsByUniqueFields] 匹配成功: ${recordId}`);
         matchedIds.push(recordId);
       }
     }
   }
 
+  console.log(`[findRecordsByUniqueFields] 共匹配 ${matchedIds.length} 条记录`);
   return matchedIds;
 }
 
