@@ -185,16 +185,30 @@ function flattenFieldValues(
     if (Array.isArray(value)) {
       const rows: Record<string, string | number>[] = [];
       for (const element of value) {
-        const row: Record<string, string | number> = {};
         if (element && typeof element === 'object') {
           const childObj = element as Record<string, unknown>;
+          // 收集所有子字段的结果，按最大长度做笛卡尔积展开
+          const childFieldResults: Record<string, Record<string, string | number>[]> = {};
+          let maxChildLength = 1;
+
           for (const child of childFields) {
             const childResults = flattenFieldValues(childObj, child, fieldName);
-            // 合并子字段结果（对于非数组子字段，返回的是单元素数组）
-            Object.assign(row, childResults[0] || {});
+            childFieldResults[child.name] = childResults;
+            if (childResults.length > maxChildLength) {
+              maxChildLength = childResults.length;
+            }
+          }
+
+          for (let i = 0; i < maxChildLength; i++) {
+            const row: Record<string, string | number> = {};
+            for (const child of childFields) {
+              const results = childFieldResults[child.name];
+              const fieldData = results[i] || results[0] || {};
+              Object.assign(row, fieldData);
+            }
+            rows.push(row);
           }
         }
-        rows.push(row);
       }
       return rows.length > 0 ? rows : [{}];
     }
@@ -202,12 +216,28 @@ function flattenFieldValues(
     // 如果值是对象（单条记录），也包装为数组
     if (value && typeof value === 'object') {
       const childObj = value as Record<string, unknown>;
-      const row: Record<string, string | number> = {};
+      const childFieldResults: Record<string, Record<string, string | number>[]> = {};
+      let maxChildLength = 1;
+
       for (const child of childFields) {
         const childResults = flattenFieldValues(childObj, child, fieldName);
-        Object.assign(row, childResults[0] || {});
+        childFieldResults[child.name] = childResults;
+        if (childResults.length > maxChildLength) {
+          maxChildLength = childResults.length;
+        }
       }
-      return [row];
+
+      const rows: Record<string, string | number>[] = [];
+      for (let i = 0; i < maxChildLength; i++) {
+        const row: Record<string, string | number> = {};
+        for (const child of childFields) {
+          const results = childFieldResults[child.name];
+          const fieldData = results[i] || results[0] || {};
+          Object.assign(row, fieldData);
+        }
+        rows.push(row);
+      }
+      return rows;
     }
 
     // 空值返回空对象数组
