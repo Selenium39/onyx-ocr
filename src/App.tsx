@@ -1,11 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import { Scene, OcrResult, OcrRow, AppPage } from './types';
+import { Scene, OcrResult, OcrRow, AppPage, SceneField } from './types';
 import { SceneManager } from './components/SceneManager';
 import { SceneEditor } from './components/SceneEditor';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultPreview } from './components/ResultPreview';
 import { Settings } from './components/Settings';
-import { getSettings } from './stores/scene-store';
+import { getSettings, getEnabledFields } from './stores/scene-store';
 import { recognizeImage, fileToBase64, urlToBase64, buildPrompt } from './services/qwen-vl';
 import {
   ensureFields,
@@ -19,6 +19,25 @@ import {
   markRecordsRecognized,
 } from './services/bitable';
 import './App.css';
+
+/**
+ * 递归扁平化字段列表，用于表格显示
+ */
+function flattenFields(fields: SceneField[], prefix = ''): Array<{ name: string; type: string }> {
+  const result: Array<{ name: string; type: string }> = [];
+
+  for (const field of fields) {
+    const fieldName = prefix ? `${prefix}.${field.name}` : field.name;
+
+    if (field.children && field.children.length > 0) {
+      result.push(...flattenFields(field.children, fieldName));
+    } else {
+      result.push({ name: fieldName, type: field.type });
+    }
+  }
+
+  return result;
+}
 
 const App: React.FC = () => {
   // 页面路由
@@ -50,6 +69,7 @@ const App: React.FC = () => {
   const [batchMode, setBatchMode] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, success: 0, failed: 0 });
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  const [batchResults, setBatchResults] = useState<OcrRow[]>([]);
 
   // 提示词预览
   const [showPrompt, setShowPrompt] = useState(false);
@@ -157,9 +177,11 @@ const App: React.FC = () => {
     setBatchMode(true);
     setError(null);
     setSuccessMsg(null);
+    setBatchResults([]);
 
     try {
-      // 1. 确保"识别状态"字段存在
+      // 1. 提前获取字段映射和状态字段
+      const fieldMap = await ensureFields(currentScene, selectedTableId);
       const statusFieldId = await ensureStatusField(selectedTableId);
 
       // 2. 批量扫描所有记录，筛选有附件且未识别的记录
@@ -177,11 +199,16 @@ const App: React.FC = () => {
       const totalImages = recordsWithImages.reduce((sum, r) => sum + r.urls.length, 0);
       setBatchProgress({ current: 0, total: totalImages, success: 0, failed: 0 });
 
-      const allResults: { recordId: string; rows: OcrRow[] }[] = [];
-      const processedRecordIds: string[] = [];
       let imageIndex = 0;
+      let totalUpdated = 0;
+      let totalInserted = 0;
 
       for (const { recordId, urls } of recordsWithImages) {
+        // 同一记录的多张图片先全部识别完，再统一写入和显示
+        const recordRows: OcrRow[] = [];
+        let recordSuccess = 0;
+        let recordFailed = 0;
+
         for (const imageUrl of urls) {
           imageIndex++;
           setBatchProgress((prev) => ({ ...prev, current: imageIndex }));
@@ -201,37 +228,34 @@ const App: React.FC = () => {
             }
 
             const result = await recognizeImage(settings, currentScene, imageData);
-            allResults.push({ recordId, rows: result.rows });
-            if (!processedRecordIds.includes(recordId)) {
-              processedRecordIds.push(recordId);
-            }
+            recordRows.push(...result.rows);
+            recordSuccess++;
             setBatchProgress((prev) => ({ ...prev, success: prev.success + 1 }));
           } catch (err: any) {
             console.error(`[BatchProcess] 处理第 ${imageIndex} 张图片失败:`, err);
+            recordFailed++;
             setBatchProgress((prev) => ({ ...prev, failed: prev.failed + 1 }));
           }
         }
-      }
 
-      // 4. 写入结果到表格
-      if (allResults.length > 0) {
-        const fieldMap = await ensureFields(currentScene, selectedTableId);
-
-        // 合并所有识别结果
-        const allRows: OcrRow[] = [];
-        for (const { rows } of allResults) {
-          allRows.push(...rows);
+        // 该记录所有图片识别完成后，统一写入和显示
+        if (recordRows.length > 0) {
+          const { updated, inserted } = await upsertRecords(recordRows, fieldMap, currentScene, selectedTableId);
+          totalUpdated += updated;
+          totalInserted += inserted;
+          setBatchResults((prev) => [...prev, ...recordRows]);
         }
 
-        // 使用 upsert 写入
-        const { updated, inserted } = await upsertRecords(allRows, fieldMap, currentScene, selectedTableId);
+        // 只要至少成功识别了一张图片，就标记该记录为已识别
+        if (recordSuccess > 0) {
+          await markRecordsRecognized([recordId], statusFieldId, selectedTableId);
+        }
+      }
 
-        // 5. 标记已成功识别的记录
-        await markRecordsRecognized(processedRecordIds, statusFieldId, selectedTableId);
-
+      if (totalUpdated + totalInserted > 0) {
         setSuccessMsg(
-          `批量处理完成！成功识别 ${allResults.length}/${recordsWithImages.length} 条记录，` +
-          `写入 ${allRows.length} 条数据（更新 ${updated} 条，新增 ${inserted} 条）`
+          `批量处理完成！共处理 ${imageIndex}/${totalImages} 张图片，` +
+          `新增 ${totalInserted} 条，更新 ${totalUpdated} 条`
         );
       } else {
         setError('没有成功识别任何图片');
@@ -426,6 +450,38 @@ const App: React.FC = () => {
               <span>处理中: {batchProgress.current}/{batchProgress.total}</span>
               <span className="success">成功: {batchProgress.success}</span>
               <span className="failed">失败: {batchProgress.failed}</span>
+            </div>
+          </div>
+        )}
+
+        {/* 批量识别结果实时展示 */}
+        {batchResults.length > 0 && currentScene && (
+          <div className="result-preview">
+            <div className="section-header">
+              <h3>识别结果（已自动写入）</h3>
+              <span className="result-meta">{batchResults.length} 条记录</span>
+            </div>
+            <div className="result-detail-table-wrapper">
+              <table className="result-detail-table">
+                <thead>
+                  <tr>
+                    <th className="row-num-col">#</th>
+                    {flattenFields(getEnabledFields(currentScene)).map((field) => (
+                      <th key={field.name}>{field.name}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {batchResults.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      <td className="row-num-col">{rowIndex + 1}</td>
+                      {flattenFields(getEnabledFields(currentScene)).map((field) => (
+                        <td key={field.name}>{String(row[field.name] ?? '')}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
