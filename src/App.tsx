@@ -243,6 +243,7 @@ const App: React.FC = () => {
           const { updated, inserted } = await upsertRecords(recordRows, fieldMap, currentScene, selectedTableId);
           totalUpdated += updated;
           totalInserted += inserted;
+          // 显示所有识别结果（包括未匹配到的）
           setBatchResults((prev) => [...prev, ...recordRows]);
         }
 
@@ -256,6 +257,11 @@ const App: React.FC = () => {
         setSuccessMsg(
           `批量处理完成！共处理 ${imageIndex}/${totalImages} 张图片，` +
           `新增 ${totalInserted} 条，更新 ${totalUpdated} 条`
+        );
+      } else if (totalUpdated + totalInserted === 0 && imageIndex > 0) {
+        setSuccessMsg(
+          `批量处理完成！共处理 ${imageIndex}/${totalImages} 张图片，` +
+          `未匹配到记录（未开启自动新增）`
         );
       } else {
         setError('没有成功识别任何图片');
@@ -282,13 +288,18 @@ const App: React.FC = () => {
 
         // 如果有唯一字段，使用 upsert
         if (currentScene.uniqueFields && currentScene.uniqueFields.length > 0) {
-          const { updated, inserted } = await upsertRecords(
+          const { updated, inserted, skipped } = await upsertRecords(
             rows,
             fieldMap,
             currentScene,
             selectedTableId || undefined
           );
-          setSuccessMsg(`已成功写入 ${rows.length} 条记录到多维表格！（更新 ${updated} 条，新增 ${inserted} 条）`);
+          let msg = `已成功写入 ${rows.length} 条记录到多维表格！（更新 ${updated} 条，新增 ${inserted} 条`;
+          if (skipped > 0) {
+            msg += `，跳过 ${skipped} 条未匹配`;
+          }
+          msg += '）';
+          setSuccessMsg(msg);
         } else {
           await insertRecords(rows, fieldMap, currentScene, selectedTableId || undefined);
           setSuccessMsg(`已成功写入 ${rows.length} 条记录到多维表格！`);

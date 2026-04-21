@@ -74,6 +74,8 @@ export interface Scene {
   uniqueFields?: string[];
   /** 目标表格ID */
   targetTableId?: string;
+  /** 未匹配时是否自动新增（默认 false） */
+  autoInsertUnmatched?: boolean;
 }
 
 /** 单行识别数据 */

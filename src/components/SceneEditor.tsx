@@ -27,6 +27,7 @@ export const SceneEditor: React.FC<Props> = ({ scene, onSave, onCancel }) => {
   const [imageColumnId, setImageColumnId] = useState(scene?.imageColumnId || '');
   const [uniqueFields, setUniqueFields] = useState<string[]>(scene?.uniqueFields || []);
   const [targetTableId, setTargetTableId] = useState(scene?.targetTableId || '');
+  const [autoInsertUnmatched, setAutoInsertUnmatched] = useState(scene?.autoInsertUnmatched ?? false);
 
   // 表格选择相关
   const [tables, setTables] = useState<{ id: string; name: string }[]>([]);
@@ -450,6 +451,7 @@ export const SceneEditor: React.FC<Props> = ({ scene, onSave, onCancel }) => {
         return validUnique.length > 0 ? validUnique : undefined;
       })(),
       targetTableId: targetTableId || undefined,
+      autoInsertUnmatched: uniqueFields.length > 0 ? autoInsertUnmatched : undefined,
     };
 
     upsertScene(sceneData);
@@ -576,8 +578,21 @@ export const SceneEditor: React.FC<Props> = ({ scene, onSave, onCancel }) => {
             ))}
           </div>
           <div className="form-hint">
-            选择用于匹配现有记录的唯一字段。如果匹配到记录则更新，否则新增。不选则全部新增。
+            选择用于匹配现有记录的唯一字段。匹配到则更新，未匹配时根据下方开关决定是否新增。不选唯一字段则全部新增。
           </div>
+
+          {/* 未匹配时是否自动新增 */}
+          {uniqueFields.length > 0 && (
+            <div className="checkbox-row" style={{ marginTop: 8 }}>
+              <input
+                type="checkbox"
+                id="autoInsertUnmatched"
+                checked={autoInsertUnmatched}
+                onChange={(e) => setAutoInsertUnmatched(e.target.checked)}
+              />
+              <label htmlFor="autoInsertUnmatched">未匹配到记录时自动新增</label>
+            </div>
+          )}
         </div>
       )}
 

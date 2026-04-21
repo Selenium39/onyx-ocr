@@ -769,10 +769,11 @@ export async function upsertRecords(
   fieldMap: Record<string, string>,
   scene: Scene,
   tableId?: string
-): Promise<{ updated: number; inserted: number; total: number }> {
+): Promise<{ updated: number; inserted: number; skipped: number; total: number }> {
   const uniqueFields = scene.uniqueFields || [];
   let updated = 0;
   let inserted = 0;
+  let skipped = 0;
 
   for (const data of dataList) {
     if (uniqueFields.length > 0) {
@@ -790,14 +791,20 @@ export async function upsertRecords(
         updated++;
         continue;
       }
+
+      // 未匹配到记录：根据 autoInsertUnmatched 决定是否新增
+      if (scene.autoInsertUnmatched !== true) {
+        skipped++;
+        continue;
+      }
     }
 
-    // 没有匹配或没有唯一字段，插入新记录
+    // 没有唯一字段 或 未匹配但允许自动新增，插入新记录
     await insertRecord(data, fieldMap, scene, tableId);
     inserted++;
   }
 
-  return { updated, inserted, total: dataList.length };
+  return { updated, inserted, skipped, total: dataList.length };
 }
 
 /**
